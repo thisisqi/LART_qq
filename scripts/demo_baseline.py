@@ -90,6 +90,10 @@ class Human4DConfig(FullConfig):
 cs = ConfigStore.instance()
 cs.store(name="config", node=Human4DConfig)
 
+
+
+
+
 @hydra.main(version_base="1.2", config_name="config")
 def main(cfg: DictConfig) -> Optional[float]:
     """Main function for running the PHALP tracker."""
