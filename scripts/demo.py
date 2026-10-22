@@ -11,6 +11,8 @@ from phalp.configs.base import CACHE_DIR, FullConfig
 from phalp.models.hmar.hmr import HMR2018Predictor
 from phalp.trackers.PHALP import PHALP
 from phalp.utils import get_pylogger
+import gc
+import torch
 
 warnings.filterwarnings('ignore')
 
@@ -50,6 +52,16 @@ class HMR2_4dhuman(PHALP):
     def setup_hmr(self):
         self.HMAR = HMR2Predictor(self.cfg)
 
+class RenderOnly(HMR2_4dhuman):
+    def setup_predictor(self):
+        # 已经有 pkl，不重新计算 LART/SlowFast
+        self.pose_predictor = None
+
+    def setup_detectron2(self):
+        # 已经有 pkl，不重新检测人体
+        self.detector = None
+        self.detector_x = None
+
 # create the tracker with action predictor
 class LART(HMR2_4dhuman):
     def __init__(self, cfg):
@@ -82,25 +94,66 @@ cs.store(name="config", node=Human4DConfig)
 def main(cfg: DictConfig) -> Optional[float]:
     """Main function for running the PHALP tracker."""
 
-    # # Setup the tracker and track the video
-    # cfg.phalp.low_th_c = 0.5
-    cfg.phalp.small_w = 100
-    cfg.phalp.small_h = 200
-    cfg.render.enable = False
-    phalp_tracker = HMR2_4dhuman(cfg)
-    _, pkl_path = phalp_tracker.track()
-    del phalp_tracker
+    # True：使用已有 pkl
+    # False：从视频重新开始计算
+    USE_EXISTING_PKL = False
 
-    # Setup the LART model and run it on the tracked video to get the action predictions
+    # True：只绘制人体模型，不重新计算 LART/SlowFast
+    # False：会运行 LART，可能重新计算 SlowFast 特征
+    RENDER_ONLY = False
+    TRACK_ONLY = False
+
+    cfg.phalp.low_th_c = 0.5
+    cfg.phalp.small_w = 30
+    cfg.phalp.small_h = 60
+
+    cfg.phalp.start_frame = -1
+    cfg.phalp.end_frame = -1
+
+    cfg.overwrite = True
+    cfg.render.fps = 15
+
+    if USE_EXISTING_PKL:
+        # 使用已经计算好的 pkl
+        pkl_path = (
+            "/home/lsy/Code/LART/outputs/"
+            "1019_test_qq_smallobj_v2/results/"
+            "demo_1019_test_demo_15fps.pkl"
+        )
+    else:
+        # 从视频重新进行人体跟踪
+        cfg.render.enable = False
+
+        phalp_tracker = HMR2_4dhuman(cfg)
+        _, pkl_path = phalp_tracker.track()
+        del phalp_tracker
+
+        if TRACK_ONLY:
+            print(f"Tracking finished. pkl saved at: {pkl_path}")
+            return
+
     cfg.render.enable = True
-    cfg.render.colors = 'slahmr'
-    cfg.render.type = "GHOST_MESH"
-    cfg.pose_predictor.config_path = f"{CACHE_DIR}/phalp/ava/lart_mvit.config"
-    cfg.pose_predictor.weights_path = f"{CACHE_DIR}/phalp/ava/lart_mvit.ckpt"
-    cfg.post_process.save_fast_tracks = True
-    lart_model = LART(cfg)
-    lart_model.setup_postprocessor()
-    lart_model.postprocessor.run_lart(pkl_path)
+    cfg.render.colors = "slahmr"
+    cfg.render.type = "HUMAN_MESH"
+
+    if RENDER_ONLY:
+        # 只读取已有 pkl 并绘制人体模型
+        renderer = RenderOnly(cfg)
+        renderer.setup_postprocessor()
+        renderer.postprocessor.run_renderer(pkl_path)
+    else:
+        # 运行 LART，可能重新计算 SlowFast 特征
+        cfg.pose_predictor.config_path = (
+            f"{CACHE_DIR}/phalp/ava/lart_mvit.config"
+        )
+        cfg.pose_predictor.weights_path = (
+            f"{CACHE_DIR}/phalp/ava/lart_mvit.ckpt"
+        )
+        cfg.post_process.save_fast_tracks = True
+
+        lart_model = LART(cfg)
+        lart_model.setup_postprocessor()
+        lart_model.postprocessor.run_lart(pkl_path)
 
 if __name__ == "__main__":
     main()
